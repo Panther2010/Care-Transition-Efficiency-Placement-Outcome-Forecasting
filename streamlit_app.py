@@ -112,32 +112,31 @@ def train_and_predict(_train, _test, target_col, features, horizon=30):
     ma_val = y_train.tail(7).mean()
     results['Moving Average'] = {'pred': np.full(len(_test), ma_val), 'model': None}
     
-    # 6. ARIMA
-    # 6. ARIMA
-    try:
-        arima = ARIMA(y_train, order=(1,1,1)).fit()
-        arima_pred = arima.forecast(steps=len(_test))
-        
-        # Check if Statsmodels failed silently and outputted NaNs
-        if pd.isna(arima_pred).any():
-            results['ARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
-        else:
-            results['ARIMA'] = {'pred': arima_pred, 'model': arima}
-    except:
-        results['ARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
+    from pmdarima import auto_arima
 
-    # 7. SARIMA
-    try:
-        sarima = SARIMAX(y_train, order=(1,1,1), seasonal_order=(0,0,0,0)).fit(disp=False)
-        sarima_pred = sarima.forecast(steps=len(_test))
-        
-        # Check if Statsmodels failed silently and outputted NaNs
-        if pd.isna(sarima_pred).any():
-            results['SARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
-        else:
-            results['SARIMA'] = {'pred': sarima_pred, 'model': sarima}
-    except:
-        results['SARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
+# --- 6. ARIMA (Auto-tuned) ---
+try:
+    # auto_arima searches for the best (p,d,q) based on AIC score
+    model_arima = auto_arima(y_train, start_p=1, start_q=1, max_p=5, max_q=5, 
+                             d=1, seasonal=False, trace=False, error_action='ignore', suppress_warnings=True)
+    # Ensure prediction is not just a flat array of zeros
+    pred_arima = model_arima.predict(n_periods=len(_test))
+    results['ARIMA'] = {'pred': pred_arima, 'model': model_arima}
+except:
+    # Fallback if auto-tuning fails
+    results['ARIMA'] = {'pred': np.full(len(_test), y_train.iloc[-1]), 'model': None}
+
+# --- 7. SARIMA (Auto-tuned with seasonality) ---
+try:
+    # m=7 assumes weekly seasonality based on your data features (lag_7, rolling_mean_7)
+    model_sarima = auto_arima(y_train, start_p=1, start_q=1, max_p=3, max_q=3, 
+                              m=7, seasonal=True, d=1, D=1, trace=False, 
+                              error_action='ignore', suppress_warnings=True)
+    pred_sarima = model_sarima.predict(n_periods=len(_test))
+    results['SARIMA'] = {'pred': pred_sarima, 'model': model_sarima}
+except:
+    # Fallback if auto-tuning fails
+    results['SARIMA'] = {'pred': np.full(len(_test), y_train.iloc[-1]), 'model': None}
         
     # Calculate Metrics
     for m in results:

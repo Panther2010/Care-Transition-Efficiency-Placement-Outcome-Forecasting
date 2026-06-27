@@ -128,10 +128,13 @@ def train_and_predict(_train, _test, target_col, features, horizon=30):
         
     # Calculate Metrics
     for m in results:
-        actual = y_test[:len(results[m]['pred'])]
-        pred = results[m]['pred']
+        # 1. Get the actuals (preserves the Date index)
+        actual = y_test.iloc[:len(results[m]['pred'])]
         
-        # Safe MAPE calculation to avoid division by zero
+        # 2. Convert predictions to a Pandas Series and align the Date index!
+        pred = pd.Series(results[m]['pred'], index=actual.index)
+        
+        # 3. Safe MAPE calculation using Pandas boolean masking
         non_zero_idx = actual != 0
         if non_zero_idx.sum() > 0:
             mape = mean_absolute_percentage_error(actual[non_zero_idx], pred[non_zero_idx])

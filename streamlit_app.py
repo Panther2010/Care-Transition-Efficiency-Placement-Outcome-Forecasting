@@ -113,16 +113,29 @@ def train_and_predict(_train, _test, target_col, features, horizon=30):
     results['Moving Average'] = {'pred': np.full(len(_test), ma_val), 'model': None}
     
     # 6. ARIMA
+    # 6. ARIMA
     try:
         arima = ARIMA(y_train, order=(1,1,1)).fit()
-        results['ARIMA'] = {'pred': arima.forecast(steps=len(_test)), 'model': arima}
+        arima_pred = arima.forecast(steps=len(_test))
+        
+        # Check if Statsmodels failed silently and outputted NaNs
+        if pd.isna(arima_pred).any():
+            results['ARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
+        else:
+            results['ARIMA'] = {'pred': arima_pred, 'model': arima}
     except:
         results['ARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
 
     # 7. SARIMA
     try:
         sarima = SARIMAX(y_train, order=(1,1,1), seasonal_order=(0,0,0,0)).fit(disp=False)
-        results['SARIMA'] = {'pred': sarima.forecast(steps=len(_test)), 'model': sarima}
+        sarima_pred = sarima.forecast(steps=len(_test))
+        
+        # Check if Statsmodels failed silently and outputted NaNs
+        if pd.isna(sarima_pred).any():
+            results['SARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
+        else:
+            results['SARIMA'] = {'pred': sarima_pred, 'model': sarima}
     except:
         results['SARIMA'] = {'pred': np.full(len(_test), ma_val), 'model': None}
         

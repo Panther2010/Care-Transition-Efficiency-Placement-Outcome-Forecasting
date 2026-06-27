@@ -128,24 +128,38 @@ def train_and_predict(_train, _test, target_col, features, horizon=30):
         
     # Calculate Metrics
     for m in results:
-        # 1. Get the actuals (preserves the Date index)
-        actual = y_test.iloc[:len(results[m]['pred'])]
+        # 1. Get the actuals and convert predictions to Pandas Series
+        actual = y_test.iloc[:len(results[m]['pred'])].astype(float)
+        pred = pd.Series(results[m]['pred'], index=actual.index).astype(float)
         
-        # 2. Convert predictions to a Pandas Series and align the Date index!
-        pred = pd.Series(results[m]['pred'], index=actual.index)
+        # 2. Create a strict boolean mask to filter out Zeros, NaNs, and Infs
+        valid_mask = (
+            (actual != 0) & 
+            actual.notna() & 
+            pred.notna() & 
+            ~np.isinf(actual) & 
+            ~np.isinf(pred)
+        )
         
-        # 3. Safe MAPE calculation using Pandas boolean masking
-        non_zero_idx = actual != 0
-        if non_zero_idx.sum() > 0:
-            mape = mean_absolute_percentage_error(actual[non_zero_idx], pred[non_zero_idx])
+        # 3. Apply the mask
+        actual_clean = actual[valid_mask]
+        pred_clean = pred[valid_mask]
+        
+        # 4. Safely calculate metrics only if we have valid data left
+        if len(actual_clean) > 0:
+            mae = mean_absolute_error(actual_clean, pred_clean)
+            rmse = np.sqrt(mean_squared_error(actual_clean, pred_clean))
+            mape = mean_absolute_percentage_error(actual_clean, pred_clean)
+            accuracy = max(0, (1 - mape) * 100)
         else:
-            mape = 0.0
+            # Fallback if the model completely failed (e.g., outputted all NaNs)
+            mae, rmse, mape, accuracy = 0.0, 0.0, 0.0, 0.0
             
         results[m]['metrics'] = {
-            'MAE': mean_absolute_error(actual, pred),
-            'RMSE': np.sqrt(mean_squared_error(actual, pred)),
+            'MAE': mae,
+            'RMSE': rmse,
             'MAPE': mape,
-            'Accuracy': max(0, (1 - mape) * 100)
+            'Accuracy': accuracy
         }
     return results
 

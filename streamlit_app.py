@@ -86,8 +86,12 @@ def train_and_predict(_train, _test, target_col, features, horizon=30):
     
     # Ensure features exist in dataframe
     valid_features = [f for f in features if f in _train.columns]
-    X_train, y_train = _train[valid_features], _train[target_col]
-    X_test, y_test = _test[valid_features], _test[target_col]
+    
+    # CLOUD FIX 1: Explicitly cast to float before training to prevent silent type errors
+    X_train = _train[valid_features].astype(float).fillna(0)
+    y_train = _train[target_col].astype(float).fillna(0)
+    X_test = _test[valid_features].astype(float).fillna(0)
+    y_test = _test[target_col].astype(float).fillna(0)
     
     # 1. Gradient Boosting
     gb = GradientBoostingRegressor(n_estimators=100, max_depth=5, random_state=42)
@@ -106,65 +110,61 @@ def train_and_predict(_train, _test, target_col, features, horizon=30):
         results['XGBoost'] = {'pred': xgb.predict(X_test), 'model': xgb}
         
     # 4. Naive Forecast
-    results['Naïve Forecast'] = {'pred': np.full(len(_test), y_train.iloc[-1]), 'model': None}
+    results['Naïve Forecast'] = {'pred': np.full(len(y_test), y_train.iloc[-1]), 'model': None}
     
     # 5. Moving Average (7-day)
     ma_val = y_train.tail(7).mean()
-    results['Moving Average'] = {'pred': np.full(len(_test), ma_val), 'model': None}
+    results['Moving Average'] = {'pred': np.full(len(y_test), ma_val), 'model': None}
     
     from pmdarima import auto_arima
 
-    # --- 6. ARIMA (Auto-tuned) ---
+    # --- 6. ARIMA (Cloud-Optimized) ---
     try:
-        # auto_arima searches for the best (p,d,q) based on AIC score
-        model_arima = auto_arima(y_train, start_p=1, start_q=1, max_p=5, max_q=5, 
-                                 d=1, seasonal=False, trace=False, error_action='ignore', suppress_warnings=True)
-        # Ensure prediction is not just a flat array of zeros
-        pred_arima = model_arima.predict(n_periods=len(_test))
+        # CLOUD FIX 2: stepwise=True and n_jobs=1 prevent memory limits and multi-threading crashes
+        model_arima = auto_arima(
+            y_train, 
+            start_p=0, start_q=0, max_p=3, max_q=3, # Reduced max complexity to save RAM
+            d=None, seasonal=False, trace=False, 
+            stepwise=True, n_jobs=1, 
+            error_action='ignore', suppress_warnings=True
+        )
+        pred_arima = model_arima.predict(n_periods=len(y_test))
         results['ARIMA'] = {'pred': pred_arima, 'model': model_arima}
-    except:
-        # Fallback if auto-tuning fails
-        results['ARIMA'] = {'pred': np.full(len(_test), y_train.iloc[-1]), 'model': None}
+    except Exception as e:
+        print(f"ARIMA Cloud Error: {e}") # Prints to Streamlit console for debugging
+        results['ARIMA'] = {'pred': np.full(len(y_test), y_train.iloc[-1]), 'model': None}
 
-    # --- 7. SARIMA (Auto-tuned with seasonality) ---
+    # --- 7. SARIMA (Cloud-Optimized) ---
     try:
-        # m=7 assumes weekly seasonality based on your data features (lag_7, rolling_mean_7)
-        model_sarima = auto_arima(y_train, start_p=1, start_q=1, max_p=3, max_q=3, 
-                                  m=7, seasonal=True, d=1, D=1, trace=False, 
-                                  error_action='ignore', suppress_warnings=True)
-        pred_sarima = model_sarima.predict(n_periods=len(_test))
+        model_sarima = auto_arima(
+            y_train, 
+            start_p=0, start_q=0, max_p=2, max_q=2, 
+            m=7, seasonal=True, d=None, D=None, trace=False, 
+            stepwise=True, n_jobs=1, 
+            error_action='ignore', suppress_warnings=True
+        )
+        pred_sarima = model_sarima.predict(n_periods=len(y_test))
         results['SARIMA'] = {'pred': pred_sarima, 'model': model_sarima}
-    except:
-        # Fallback if auto-tuning fails
-        results['SARIMA'] = {'pred': np.full(len(_test), y_train.iloc[-1]), 'model': None}
+    except Exception as e:
+        print(f"SARIMA Cloud Error: {e}")
+        results['SARIMA'] = {'pred': np.full(len(y_test), y_train.iloc[-1]), 'model': None}
         
     # Calculate Metrics
     for m in results:
-        # 1. Get the actuals and convert predictions to Pandas Series
         actual = y_test.iloc[:len(results[m]['pred'])].astype(float)
         pred = pd.Series(results[m]['pred'], index=actual.index).astype(float)
         
-        # 2. Create a strict boolean mask to filter out Zeros, NaNs, and Infs
-        valid_mask = (
-            (actual != 0) & 
-            actual.notna() & 
-            pred.notna() & 
-            ~np.isinf(actual) & 
-            ~np.isinf(pred)
-        )
+        valid_mask = (actual != 0) & actual.notna() & pred.notna() & ~np.isinf(actual) & ~np.isinf(pred)
         
-        # 3. Apply the mask
         actual_clean = actual[valid_mask]
         pred_clean = pred[valid_mask]
         
-        # 4. Safely calculate metrics only if we have valid data left
         if len(actual_clean) > 0:
             mae = mean_absolute_error(actual_clean, pred_clean)
             rmse = np.sqrt(mean_squared_error(actual_clean, pred_clean))
             mape = mean_absolute_percentage_error(actual_clean, pred_clean)
             accuracy = max(0, (1 - mape) * 100)
         else:
-            # Fallback if the model completely failed (e.g., outputted all NaNs)
             mae, rmse, mape, accuracy = 0.0, 0.0, 0.0, 0.0
             
         results[m]['metrics'] = {
